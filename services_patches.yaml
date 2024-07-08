@@ -1,0 +1,101 @@
+---
+- name: Gather system patches & services
+  hosts: all
+  become: yes
+  gather_facts: yes
+  vars:
+    ansible_user: "{{ user }}"
+    ansible_password: "{{ password }}"
+    ansible_become_password: "{{ become_password }}"
+  tasks:
+    - name: Print the current working directory
+      command: pwd
+      register: current_dir
+
+    - name: Debug the current working directory
+      debug:
+        var: current_dir.stdout
+
+    - name: Create directory for output files in PWD
+      file:
+        path: "{{ current_dir.stdout }}/services_patchs_sys_config"
+        state: directory
+
+    - name: Gather Linux patch details
+      when: ansible_facts['os_family'] == 'RedHat' or ansible_facts['os_family'] == 'Debian'
+      block:
+        - name: List installed packages with dates (Debian-based)
+          shell: |
+            dpkg-query -W -f='${binary:Package}\t${Version}\t${Architecture}\n' | \
+            while read -r pkg ver arch; do \
+              install_date=$(grep "install $pkg " /var/log/dpkg.log* | head -n 1 | awk '{print $1, $2}'); \
+              echo -e "$pkg\t$ver\t$arch\t$install_date"; \
+            done | column -t
+          register: debian_packages
+          when: ansible_facts['os_family'] == 'Debian'
+
+        - name: List installed packages with dates (RedHat-based)
+          command: rpm -qa --queryformat '%{NAME}\t%{VERSION}\t%{ARCH}\t%{INSTALLTIME:date}\n' | column -t
+          register: redhat_packages
+          when: ansible_facts['os_family'] == 'RedHat'
+
+        - name: Write Debian packages to file
+          copy:
+            content: "{{ debian_packages.stdout }}"
+            dest: "{{ current_dir.stdout }}/services_patchs_sys_config/debian_packages.txt"
+          when: ansible_facts['os_family'] == 'Debian'
+
+        - name: Write RedHat packages to file
+          copy:
+            content: "{{ redhat_packages.stdout }}"
+            dest: "{{ current_dir.stdout }}/services_patchs_sys_config/redhat_packages.txt"
+          when: ansible_facts['os_family'] == 'RedHat'
+
+    - name: List services with status (Linux)
+      when: ansible_facts['os_family'] == 'RedHat' or ansible_facts['os_family'] == 'Debian'
+      service_facts:
+
+    - name: Write Linux services to file
+      copy:
+        content: "{{ ansible_facts.services | to_nice_json }}"
+        dest: "{{ current_dir.stdout }}/services_patchs_sys_config/linux_services.json"
+      when: ansible_facts['os_family'] == 'RedHat' or ansible_facts['os_family'] == 'Debian'
+
+    - name: Fetch Debian packages file to control node
+      fetch:
+        src: "{{ current_dir.stdout }}/services_patchs_sys_config/debian_packages.txt"
+        dest: "./services_patchs_sys_config/{{ inventory_hostname }}_debian_packages.txt"
+        flat: yes
+      when: ansible_facts['os_family'] == 'Debian'
+
+    - name: Fetch RedHat packages file to control node
+      fetch:
+        src: "{{ current_dir.stdout }}/services_patchs_sys_config/redhat_packages.txt"
+        dest: "./services_patchs_sys_config/{{ inventory_hostname }}_redhat_packages.txt"
+        flat: yes
+      when: ansible_facts['os_family'] == 'RedHat'
+
+    - name: Fetch Linux services file to control node
+      fetch:
+        src: "{{ current_dir.stdout }}/services_patchs_sys_config/linux_services.json"
+        dest: "./services_patchs_sys_config/{{ inventory_hostname }}_linux_services.json"
+        flat: yes
+      when: ansible_facts['os_family'] == 'RedHat' or ansible_facts['os_family'] == 'Debian'
+
+    - name: Clean up Debian packages file from worker node
+      file:
+        path: "{{ current_dir.stdout }}/services_patchs_sys_config/debian_packages.txt"
+        state: absent
+      when: ansible_facts['os_family'] == 'Debian'
+
+    - name: Clean up RedHat packages file from worker node
+      file:
+        path: "{{ current_dir.stdout }}/services_patchs_sys_config/redhat_packages.txt"
+        state: absent
+      when: ansible_facts['os_family'] == 'RedHat'
+
+    - name: Clean up Linux services file from worker node
+      file:
+        path: "{{ current_dir.stdout }}/services_patchs_sys_config/linux_services.json"
+        state: absent
+      when: ansible_facts['os_family'] == 'RedHat' or ansible_facts['os_family'] == 'Debian'
